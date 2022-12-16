@@ -20,6 +20,9 @@ behavior_changes:
 - area: build
   change: |
     moved the strict_dns, original_dst, logical_dns, static, and eds clusters to extensions. If you use these clusters and override extensions_build_config.bzl you will now need to include it explicitly.
+- area: http
+  change: |
+    Validate upstream request header names and values. The new runtime flag ``envoy.reloadable_features.validate_upstream_headers`` can be used for revert this behavior.
 
 minor_behavior_changes:
 # *Changes that may cause incompatibilities for some users, but should not for most*
