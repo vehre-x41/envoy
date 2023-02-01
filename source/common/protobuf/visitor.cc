@@ -55,7 +55,8 @@ private:
   std::vector<const Protobuf::Message*>& parents_;
 };
 
-void traverseMessageWorker(ConstProtoVisitor& visitor, const Protobuf::Message& message,
+template <typename MESSAGE, typename VISITOR>
+void traverseMessageWorker(VISITOR& visitor, MESSAGE& message,
                            std::vector<const Protobuf::Message*>& parents,
                            bool was_any_or_top_level, bool recurse_into_any) {
   visitor.onMessage(message, parents, was_any_or_top_level);
@@ -119,7 +120,13 @@ void traverseMessageWorker(ConstProtoVisitor& visitor, const Protobuf::Message& 
 void traverseMessage(ConstProtoVisitor& visitor, const Protobuf::Message& message,
                      bool recurse_into_any) {
   std::vector<const Protobuf::Message*> parents;
-  traverseMessageWorker(visitor, message, parents, true, recurse_into_any);
+  traverseMessageWorker<const Protobuf::Message>(visitor, message, parents, true, recurse_into_any);
+}
+
+void traverseMessage(ProtoVisitor& visitor, Protobuf::Message& message, bool recurse_into_any) {
+  std::vector<const Protobuf::Message*> parents;
+  traverseMessageWorker<Protobuf::Message, ProtoVisitor>(visitor, message, parents, true,
+                                                         recurse_into_any);
 }
 
 } // namespace ProtobufMessage
