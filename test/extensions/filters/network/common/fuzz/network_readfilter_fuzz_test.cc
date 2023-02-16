@@ -9,6 +9,10 @@
 #include "test/test_common/test_runtime.h"
 #include "src/libfuzzer/libfuzzer_mutator.h"
 
+// for GenerateValidMessage-Visitor
+#include "source/common/protobuf/visitor.h"
+#include "validate/validate.h"
+
 namespace Envoy {
 namespace Extensions {
 namespace NetworkFilters {
@@ -41,6 +45,50 @@ mutate_config(unsigned int seed, envoy::config::listener::v3::Filter* config = n
   return *config;
 }
 
+class GenerateValidMessage : public ProtobufMessage::ProtoVisitor, private pgv::BaseValidator {
+public:
+  class Mutator : public protobuf_mutator::libfuzzer::Mutator {
+  public:
+    using protobuf_mutator::libfuzzer::Mutator::Mutator;
+
+    using protobuf_mutator::libfuzzer::Mutator::MutateString;
+  };
+  GenerateValidMessage(unsigned int seed) { mutator_.Seed(seed); }
+
+  void onField(google::protobuf::Message& msg,
+               const google::protobuf::FieldDescriptor& field) override {
+    if (field.cpp_type() != Protobuf::FieldDescriptor::CPPTYPE_MESSAGE) {
+      const google::protobuf::Reflection* reflection = msg.GetReflection();
+      bool keepMutating = true;
+      while (keepMutating) {
+        try {
+          switch (field.cpp_type()) {
+          case Protobuf::FieldDescriptor::CPPTYPE_STRING: {
+            std::string str = reflection->GetString(msg, &field);
+            str = mutator_.MutateString(str, 1l << 16);
+            reflection->SetString(&msg, &field, str);
+            break;
+          }
+          default:
+            keepMutating = false;
+            break;
+          }
+
+          MessageUtil::recursivePgvCheck(msg);
+          keepMutating = false;
+        } catch (const ProtoValidationException&) {
+          keepMutating = true;
+        }
+      }
+    }
+  }
+  void onMessage(google::protobuf::Message&, absl::Span<const google::protobuf::Message* const>,
+                 bool) override {}
+
+private:
+  Mutator mutator_;
+};
+
 DEFINE_PROTO_FUZZER(const test::extensions::filters::network::FilterFuzzTestCase& input) {
   //  TestDeprecatedV2Api _deprecated_v2_api;
   ABSL_ATTRIBUTE_UNUSED static PostProcessorRegistration reg = {
@@ -62,30 +110,10 @@ DEFINE_PROTO_FUZZER(const test::extensions::filters::network::FilterFuzzTestCase
         }
         input->mutable_config()->operator=(config);
 
-        unsigned cnt = 0;
-        /* Mutate to find a valid configuration. */
-        static protobuf_mutator::libfuzzer::Mutator mutator;
-        static bool mutator_inited = false;
-        if (!mutator_inited) {
-          mutator.Seed(seed);
-          mutator_inited = true;
-        }
-        for (;;) {
-          try {
-            MessageUtil::recursivePgvCheck(*input);
-            break;
-          } catch (const ProtoValidationException& e) {
-            mutator.Mutate(input, 1l << 16);
-            input->mutable_config()->set_name(config.name());
-            input->mutable_config()->mutable_typed_config()->set_type_url(
-                config.typed_config().type_url());
-            ++cnt;
-            ENVOY_LOG_MISC(debug, "Creating valid config, iteration {}, rejected because: {}", cnt,
-                           e.what());
-          }
-        }
+        GenerateValidMessage generator(seed);
+        ProtobufMessage::traverseMessage(generator, *input, true);
 
-        ENVOY_LOG_MISC(debug, "Valid config after {} iterations: {}", cnt, input->DebugString());
+        ENVOY_LOG_MISC(debug, "Valid new config: {}", input->DebugString());
         ++config_mutation_cnt;
       }};
 

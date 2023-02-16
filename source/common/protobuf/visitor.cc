@@ -55,7 +55,34 @@ private:
   std::vector<const Protobuf::Message*>& parents_;
 };
 
-template <typename MESSAGE, typename VISITOR>
+static const Protobuf::Message& getMessageHelper(const Protobuf::Reflection* reflection,
+                                                 const Protobuf::Message& message,
+                                                 const Protobuf::FieldDescriptor* field) {
+  return reflection->GetMessage(message, field);
+}
+
+static Protobuf::Message& getMutableMessageHelper(const Protobuf::Reflection* reflection,
+                                                  Protobuf::Message& message,
+                                                  const Protobuf::FieldDescriptor* field) {
+  return *reflection->MutableMessage(&message, field);
+}
+
+static const Protobuf::Message& getRepeatedMessageHelper(const Protobuf::Reflection* reflection,
+                                                         const Protobuf::Message& message,
+                                                         const Protobuf::FieldDescriptor* field,
+                                                         int index) {
+  return reflection->GetRepeatedMessage(message, field, index);
+}
+
+static Protobuf::Message& getMutableRepeatedMessageHelper(const Protobuf::Reflection* reflection,
+                                                          Protobuf::Message& message,
+                                                          const Protobuf::FieldDescriptor* field,
+                                                          int index) {
+  return *reflection->MutableRepeatedMessage(&message, field, index);
+}
+
+template <typename VISITOR, typename MESSAGE, auto MSGGETTER = &getMessageHelper,
+          auto REPMSGGETTER = &getRepeatedMessageHelper>
 void traverseMessageWorker(VISITOR& visitor, MESSAGE& message,
                            std::vector<const Protobuf::Message*>& parents,
                            bool was_any_or_top_level, bool recurse_into_any) {
@@ -84,7 +111,8 @@ void traverseMessageWorker(VISITOR& visitor, MESSAGE& message,
     if (inner_message != nullptr) {
       // Push the Any message as a wrapper.
       ScopedMessageParents scoped_parents(parents, message);
-      traverseMessageWorker(visitor, *inner_message, parents, true, recurse_into_any);
+      traverseMessageWorker<VISITOR, MESSAGE, MSGGETTER, REPMSGGETTER>(
+          visitor, *inner_message, parents, true, recurse_into_any);
       return;
     } else if (!target_type_url.empty()) {
       throw EnvoyException(fmt::format("Invalid type_url '{}' during traversal", target_type_url));
@@ -104,12 +132,13 @@ void traverseMessageWorker(VISITOR& visitor, MESSAGE& message,
       if (field->is_repeated()) {
         const int size = reflection->FieldSize(message, field);
         for (int j = 0; j < size; ++j) {
-          traverseMessageWorker(visitor, reflection->GetRepeatedMessage(message, field, j), parents,
-                                false, recurse_into_any);
+          traverseMessageWorker<VISITOR, MESSAGE, MSGGETTER, REPMSGGETTER>(
+              visitor, (*REPMSGGETTER)(reflection, message, field, j), parents, false,
+              recurse_into_any);
         }
       } else if (reflection->HasField(message, field)) {
-        traverseMessageWorker(visitor, reflection->GetMessage(message, field), parents, false,
-                              recurse_into_any);
+        traverseMessageWorker<VISITOR, MESSAGE, MSGGETTER, REPMSGGETTER>(
+            visitor, (*MSGGETTER)(reflection, message, field), parents, false, recurse_into_any);
       }
     }
   }
@@ -120,13 +149,14 @@ void traverseMessageWorker(VISITOR& visitor, MESSAGE& message,
 void traverseMessage(ConstProtoVisitor& visitor, const Protobuf::Message& message,
                      bool recurse_into_any) {
   std::vector<const Protobuf::Message*> parents;
-  traverseMessageWorker<const Protobuf::Message>(visitor, message, parents, true, recurse_into_any);
+  traverseMessageWorker(visitor, message, parents, true, recurse_into_any);
 }
 
 void traverseMessage(ProtoVisitor& visitor, Protobuf::Message& message, bool recurse_into_any) {
   std::vector<const Protobuf::Message*> parents;
-  traverseMessageWorker<Protobuf::Message, ProtoVisitor>(visitor, message, parents, true,
-                                                         recurse_into_any);
+  traverseMessageWorker<ProtoVisitor, Protobuf::Message, &getMutableMessageHelper,
+                        &getMutableRepeatedMessageHelper>(visitor, message, parents, true,
+                                                          recurse_into_any);
 }
 
 } // namespace ProtobufMessage
